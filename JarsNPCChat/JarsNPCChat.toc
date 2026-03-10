@@ -1,0 +1,8 @@
+## Interface: 120001, 120000
+## Title: Jar's NPC Chat
+## Notes: Replaces default quest/gossip UI with a centered text bubble layout
+## Author: Jar
+## Version: 1.0
+## SavedVariables: JarsNPCChatDB
+
+JarsNPCChat.lua

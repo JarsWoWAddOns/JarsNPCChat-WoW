@@ -392,8 +392,8 @@ local function PositionRightPanels()
 end
 
 local function HideUI()
+    currentState = nil  -- clear BEFORE hiding so OnHide doesn't re-close gossip (would cancel bank open)
     mainFrame:Hide()
-    currentState = nil
     ReleaseAllOptionButtons()
     ReleaseAllRewardButtons()
     optionsPanel:Hide()

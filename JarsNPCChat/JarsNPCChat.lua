@@ -27,6 +27,9 @@ local STYLE = {
 ---------------------------------------------------------------------------
 local currentState = nil
 local selectedReward = nil
+local blizzGossip = false
+
+local TITLE_MIN, TITLE_MAX = 10, 33
 
 ---------------------------------------------------------------------------
 -- Saved Variables defaults
@@ -73,6 +76,7 @@ bubble:SetBackdrop({
 bubble:SetBackdropColor(unpack(STYLE.bg))
 bubble:SetBackdropBorderColor(unpack(STYLE.border))
 bubble:EnableMouse(true)
+bubble:SetHyperlinksEnabled(true)
 
 -- Tooltip for inline hyperlinks (item/spell links) in quest/gossip text
 bubble:SetScript("OnHyperlinkEnter", function(self, link)
@@ -136,6 +140,17 @@ rewardLabel:SetTextColor(unpack(STYLE.title))
 rewardLabel:SetJustifyH("LEFT")
 rewardLabel:SetPoint("TOPLEFT", rewardFrame, "TOPLEFT", 0, 0)
 
+-- second row label for fixed rewards when theres choices too
+local rewardLabel2 = rewardFrame:CreateFontString(nil, "OVERLAY")
+rewardLabel2:SetFont(FONT, 12, "")
+rewardLabel2:SetTextColor(unpack(STYLE.title))
+rewardLabel2:SetJustifyH("LEFT")
+
+local moneyText = rewardFrame:CreateFontString(nil, "OVERLAY")
+moneyText:SetFont(FONT, 12, "")
+moneyText:SetTextColor(unpack(STYLE.body))
+moneyText:SetJustifyH("LEFT")
+
 ---------------------------------------------------------------------------
 -- Button Panel (right of bubble, below options panel)
 ---------------------------------------------------------------------------
@@ -166,6 +181,9 @@ local STATE_BUTTONS = {
         { text = "Accept", action = function() AcceptQuest() end },
         { text = "Decline", action = function() DeclineQuest() end },
     },
+    QUEST_AUTO = {
+        { text = "OK", action = function() AcknowledgeAutoAcceptQuest() end },
+    },
     QUEST_GREETING = {
         { text = "Close", action = function() CloseQuest() end },
     },
@@ -174,7 +192,14 @@ local STATE_BUTTONS = {
         { text = "Close", action = function() CloseQuest() end },
     },
     QUEST_COMPLETE = {
-        { text = "Complete", action = function() GetQuestReward(selectedReward) end },
+        -- { text = "Complete", action = function() GetQuestReward(selectedReward) end },
+        { text = "Complete", action = function()
+            if (GetNumQuestChoices() or 0) > 1 and not selectedReward then
+                UIErrorsFrame:AddMessage("Pick a reward first.", 1, 0.1, 0.1)
+                return
+            end
+            GetQuestReward(selectedReward)
+        end },
     },
 }
 
@@ -414,6 +439,8 @@ local function ShowGossip()
     rewardFrame:Hide()
 
     local options = C_GossipInfo.GetOptions() or {}
+    -- same order blizz uses
+    table.sort(options, function(a, b) return a.orderIndex < b.orderIndex end)
     local availableQuests = C_GossipInfo.GetAvailableQuests() or {}
     local activeQuests = C_GossipInfo.GetActiveQuests() or {}
 
@@ -483,7 +510,8 @@ local function ShowQuestOffer()
     rewardFrame:Hide()
 
     PositionRightPanels()
-    SetActionButtons("QUEST_OFFER")
+    -- auto accept quests only get an OK
+    SetActionButtons(QuestGetAutoAccept() and "QUEST_AUTO" or "QUEST_OFFER")
     ResizeBubble()
     mainFrame:Show()
 end
@@ -563,8 +591,34 @@ local function ShowQuestProgress()
     mainFrame:Show()
 end
 
+-- one row of reward icons, returns the new y
+local function AddRewardRow(label, kind, count, y, isChoice)
+    label:ClearAllPoints()
+    label:SetPoint("TOPLEFT", rewardFrame, "TOPLEFT", 0, y)
+    label:Show()
+    for i = 1, count do
+        local _, texture = GetQuestItemInfo(kind, i)
+        local btn = GetRewardButton()
+        btn:ClearAllPoints()
+        btn:SetPoint("TOPLEFT", rewardFrame, "TOPLEFT", (i - 1) * 40, y - 18)
+        btn.icon:SetTexture(texture)
+        btn.link = GetQuestItemLink(kind, i)
+        btn.index = isChoice and i or nil
+        btn.isChoice = isChoice
+        btn.selected:SetShown(isChoice and i == selectedReward)
+        if isChoice then
+            btn:SetScript("OnClick", function(self)
+                selectedReward = self.index
+                UpdateRewardSelection()
+            end)
+        end
+    end
+    return y - 58
+end
+
 local function ShowQuestComplete()
     currentState = "QUEST_COMPLETE"
+    selectedReward = nil
 
     titleText:SetText(GetTitleText())
     bodyText:SetText(GetRewardText())
@@ -572,57 +626,42 @@ local function ShowQuestComplete()
     ReleaseAllOptionButtons()
     ReleaseAllRewardButtons()
     optionsPanel:Hide()
+    rewardLabel:Hide()
+    rewardLabel2:Hide()
+    moneyText:Hide()
 
     local numChoices = GetNumQuestChoices() or 0
     local numRewards = GetNumQuestRewards() or 0
+    local money = GetRewardMoney() or 0
 
-    if numChoices > 0 or numRewards > 0 then
+    if numChoices > 0 or numRewards > 0 or money > 0 then
         rewardFrame:Show()
-        local xOffset = 0
-        local rowHeight = 40
+        local y = 0
 
         if numChoices > 0 then
             rewardLabel:SetText("Choose a reward:")
-            rewardLabel:Show()
-            selectedReward = 1
-
-            for i = 1, numChoices do
-                local name, texture = GetQuestItemInfo("choice", i)
-                local link = GetQuestItemLink("choice", i)
-                local btn = GetRewardButton()
-                btn:SetPoint("TOPLEFT", rewardFrame, "TOPLEFT", xOffset, -18)
-                btn.icon:SetTexture(texture)
-                btn.link = link
-                btn.index = i
-                btn.isChoice = true
-                btn.selected:SetShown(i == selectedReward)
-                btn:SetScript("OnClick", function(self)
-                    selectedReward = self.index
-                    UpdateRewardSelection()
-                end)
-                xOffset = xOffset + 40
-            end
-            rowHeight = 58
-        elseif numRewards > 0 then
-            rewardLabel:SetText("You will receive:")
-            rewardLabel:Show()
-
-            for i = 1, numRewards do
-                local name, texture = GetQuestItemInfo("reward", i)
-                local link = GetQuestItemLink("reward", i)
-                local btn = GetRewardButton()
-                btn:SetPoint("TOPLEFT", rewardFrame, "TOPLEFT", xOffset, -18)
-                btn.icon:SetTexture(texture)
-                btn.link = link
-                btn.isChoice = false
-                xOffset = xOffset + 40
-            end
+            -- selectedReward = 1
+            if numChoices == 1 then selectedReward = 1 end
+            y = AddRewardRow(rewardLabel, "choice", numChoices, y, true)
         end
 
-        rewardFrame:SetSize(math.max(xOffset, 100), rowHeight)
+        if numRewards > 0 then
+            local label = numChoices > 0 and rewardLabel2 or rewardLabel
+            label:SetText(numChoices > 0 and "You will also receive:" or "You will receive:")
+            y = AddRewardRow(label, "reward", numRewards, y, false)
+        end
+
+        if money > 0 then
+            moneyText:ClearAllPoints()
+            moneyText:SetPoint("TOPLEFT", rewardFrame, "TOPLEFT", 0, y)
+            moneyText:SetText(C_CurrencyInfo.GetCoinTextureString(money, 12))
+            moneyText:Show()
+            y = y - 18
+        end
+
+        rewardFrame:SetSize(math.max(math.max(numChoices, numRewards) * 40, 100), -y)
     else
         rewardFrame:Hide()
-        rewardLabel:Hide()
     end
 
     PositionRightPanels()
@@ -678,6 +717,25 @@ eventFrame:RegisterEvent("QUEST_GREETING")
 eventFrame:RegisterEvent("QUEST_PROGRESS")
 eventFrame:RegisterEvent("QUEST_COMPLETE")
 eventFrame:RegisterEvent("QUEST_FINISHED")
+eventFrame:RegisterEvent("QUEST_ITEM_UPDATE")
+
+-- only close if the close event matches what we're showing, and the npc is really gone
+local GOSSIP_STATES = { GOSSIP = true }
+local QUEST_STATES = { QUEST_OFFER = true, QUEST_GREETING = true, QUEST_PROGRESS = true, QUEST_COMPLETE = true }
+
+local function IsStillTalking()
+    local pim = C_PlayerInteractionManager
+    return pim.IsInteractingWithNpcOfType(Enum.PlayerInteractionType.Gossip)
+        or pim.IsInteractingWithNpcOfType(Enum.PlayerInteractionType.QuestGiver)
+end
+
+local function HideWhenDone(states)
+    C_Timer.After(0, function()
+        if not states[currentState] then return end
+        if IsStillTalking() then return end
+        HideUI()
+    end)
+end
 
 eventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
@@ -689,6 +747,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         end
 
         -- Apply saved font sizes
+        JarsNPCChatDB.titleFontSize = math.min(math.max(JarsNPCChatDB.titleFontSize, TITLE_MIN), TITLE_MAX)
         titleText:SetFont(FONT, JarsNPCChatDB.titleFontSize, "")
         bodyText:SetFont(FONT, JarsNPCChatDB.fontSize, "")
 
@@ -697,7 +756,34 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         print("|cff00ccffJar's NPC Chat|r loaded. Type |cff00ff00/jnc|r for help.")
 
     elseif event == "GOSSIP_SHOW" then
-        ShowGossip()
+        local textureKit = ...
+        if textureKit and CustomGossipFrameManager then
+            -- delve pickers etc, let blizz do it
+            HideUI()
+            blizzGossip = true
+            CustomGossipFrameManager:HandleOpenEvent(textureKit)
+        else
+            ShowGossip()
+        end
+
+    elseif event == "GOSSIP_CLOSED" then
+        if blizzGossip then
+            blizzGossip = false
+            CustomGossipFrameManager:HideOpenedUIPanel(...)
+        end
+        HideWhenDone(GOSSIP_STATES)
+
+    elseif event == "QUEST_FINISHED" then
+        HideWhenDone(QUEST_STATES)
+
+    elseif event == "QUEST_ITEM_UPDATE" then
+        -- redraw rewards, keep whatever they picked
+        if currentState == "QUEST_COMPLETE" then
+            local keep = selectedReward
+            ShowQuestComplete()
+            selectedReward = keep or selectedReward
+            UpdateRewardSelection()
+        end
 
     elseif event == "QUEST_DETAIL" then
         ShowQuestOffer()
@@ -710,11 +796,33 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
 
     elseif event == "QUEST_COMPLETE" then
         ShowQuestComplete()
-
-    elseif event == "GOSSIP_CLOSED" or event == "QUEST_FINISHED" then
-        HideUI()
     end
 end)
+
+---------------------------------------------------------------------------
+-- Small API so JarStick (gamepad) can drive the buttons
+---------------------------------------------------------------------------
+JarsNPCChatAPI = {
+    frame = mainFrame,
+    GetState = function() return currentState end,
+    GetSelectedReward = function() return selectedReward end,
+    GetOptions = function() return activeOptionButtons end, -- top to bottom
+    GetActions = function()
+        local shown = {}
+        for i = 1, MAX_ACTION_BUTTONS do
+            if actionButtons[i]:IsShown() then shown[#shown + 1] = actionButtons[i] end
+        end
+        return shown
+    end,
+    GetRewardChoices = function()
+        local choices = {}
+        for _, btn in ipairs(activeRewardButtons) do
+            if btn.isChoice then choices[#choices + 1] = btn end
+        end
+        table.sort(choices, function(a, b) return a.index < b.index end)
+        return choices
+    end,
+}
 
 ---------------------------------------------------------------------------
 -- Slash command
@@ -731,6 +839,7 @@ SlashCmdList["JARSNPCCHAT"] = function(msg)
         local bodySize, titleSize = msg:match("^fontsize%s+(%d+)%s*(%d*)")
         bodySize = tonumber(bodySize)
         titleSize = tonumber(titleSize) or bodySize + 3
+        titleSize = math.min(math.max(titleSize, TITLE_MIN), TITLE_MAX)
         if bodySize >= 10 and bodySize <= 30 then
             JarsNPCChatDB.fontSize = bodySize
             JarsNPCChatDB.titleFontSize = titleSize
